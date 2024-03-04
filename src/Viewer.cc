@@ -314,6 +314,9 @@ void Viewer::Run()
             mpMapDrawer->DrawKeyFrames(menuShowKeyFrames,menuShowGraph, menuShowInertialGraph, menuShowOptLba);
         if(menuShowPoints)
             mpMapDrawer->DrawMapPoints();
+        else{
+            mpMapDrawer->DrawOctoMap();
+        }
 
         pangolin::FinishFrame();
 

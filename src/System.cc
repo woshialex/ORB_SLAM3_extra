@@ -15,8 +15,61 @@
 * You should have received a copy of the GNU General Public License along with ORB-SLAM3.
 * If not, see <http://www.gnu.org/licenses/>.
 */
+/*
+* ORB-SLAM2 主要借鉴了PTAM的思想，借鉴的工作主要有
+* Rubble的ORB特征点；
+* DBow2的place recognition用于闭环检测；
+* Strasdat的闭环矫正和covisibility graph思想；
+* 以及Kuemmerle和Grisetti的g2o用于优化。
+* 
+* 
+* 系统入口:
+* 1】输入图像    得到 相机位置
+*       单目 GrabImageMonocular(im);
+*       双目 GrabImageStereo(imRectLeft, imRectRight);
+*       深度 GrabImageMonocular(imRectLeft, imRectRight);
+* 
+* 2】转换为灰度图
+*       单目 mImGray
+*       双目 mImGray, imGrayRight
+*       深度 mImGray, imDepth
+* 
+* 3】构造 帧Frame
+*       单目 未初始化  Frame(mImGray, mpIniORBextractor)
+*       单目 已初始化  Frame(mImGray, mpORBextractorLeft)
+*       双目      Frame(mImGray, imGrayRight, mpORBextractorLeft, mpORBextractorRight)
+*       深度      Frame(mImGray, imDepth,        mpORBextractorLeft)
+* 
+* 4】跟踪 Track
+*   数据流进入 Tracking线程   Tracking.cc
+* 
+* 
+* 
+* ORB-SLAM利用三个线程分别进行追踪、地图构建和闭环检测。
 
+一、追踪
 
+    ORB特征提取
+    初始姿态估计（速度估计）
+    姿态优化（Track local map，利用邻近的地图点寻找更多的特征匹配，优化姿态）
+    选取关键帧
+
+二、地图构建
+
+    加入关键帧（更新各种图）
+    验证最近加入的地图点（去除Outlier）
+    生成新的地图点（三角法）
+    局部Bundle adjustment（该关键帧和邻近关键帧，去除Outlier）
+    验证关键帧（去除重复帧）
+
+三、闭环检测
+
+    选取相似帧（bag of words）
+    检测闭环（计算相似变换（3D<->3D，存在尺度漂移，因此是相似变换），RANSAC计算内点数）
+    融合三维点，更新各种图
+    图优化（传导变换矩阵），更新地图所有点
+
+*/
 
 #include "System.h"
 #include "Converter.h"
@@ -39,7 +92,7 @@ namespace ORB_SLAM3
 Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
 
 System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
-               const bool bUseViewer, const int initFr, const string &strSequence):
+               const bool bUseViewer, const int initFr, const string &strSequence, const bool bDenseMapping):
     mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
     mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
 {
@@ -208,6 +261,16 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     else
         mpLocalMapper->mbFarPoints = false;
 
+    //Initialize the Dense mapping thread and launch
+    if(bDenseMapping){
+        mpDenseMapper = new DenseMapping(this, mpAtlas, 0.05); //todo: resolution as parameter
+        mptDenseMapping = new thread(&ORB_SLAM3::DenseMapping::Run, mpDenseMapper);
+        mpMapDrawer->mpDenseMapper = mpDenseMapper;
+    }else{
+        mpDenseMapper = NULL;
+        mptDenseMapping = NULL;
+    }
+
     //Initialize the Loop Closing thread and launch
     // mSensor!=MONOCULAR && mSensor!=IMU_MONOCULAR
     mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
@@ -219,6 +282,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
     mpLocalMapper->SetTracker(mpTracker);
     mpLocalMapper->SetLoopCloser(mpLoopCloser);
+    mpLocalMapper->SetDenseMapper(mpDenseMapper);
 
     mpLoopCloser->SetTracker(mpTracker);
     mpLoopCloser->SetLocalMapper(mpLocalMapper);

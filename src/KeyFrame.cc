@@ -19,6 +19,7 @@
 #include "KeyFrame.h"
 #include "Converter.h"
 #include "ImuTypes.h"
+#include <pcl/filters/statistical_outlier_removal.h>
 #include<mutex>
 
 namespace ORB_SLAM3
@@ -1164,7 +1165,7 @@ void KeyFrame::SetKeyFrameDatabase(KeyFrameDatabase* pKFDB)
     mpKeyFrameDB = pKFDB;
 }
 
-// 生成当前帧的点云，简单滤波  maybe add split of ground and non-ground, not sure it is needed
+// 生成当前帧的点云，简单滤波  todo: add the split of ground and non-ground
 void KeyFrame::UpdatePointCloud()
 {
     mCamPC->points.clear();
@@ -1172,8 +1173,8 @@ void KeyFrame::UpdatePointCloud()
      {
           for ( int n=0; n<(mImDep.cols); n+=1 )//每一列
           {
-              float d = mImDep.ptr<float>(m)[n];// 深度 m为单位 保留0.4～4m内的点
-              if (d < 0.40 || d>4.0) // 相机测量范围
+              float d = mImDep.ptr<float>(m)[n];// 深度 m为单位 
+              if (d < 0.10 || d>8.0) // 相机测量范围, remove out of range point
                  continue;
               pcl::PointXYZ p;
               p.z = d;
@@ -1186,17 +1187,25 @@ void KeyFrame::UpdatePointCloud()
               mCamPC->points.push_back( p );
           }
      }
-// 体素格滤波======
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr tmp( new pcl::PointCloud<pcl::PointXYZ> );
+    //remove isolated points, cause segmentation error
+    // pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
+    // sor.setInputCloud(mCamPC);
+    // sor.setMeanK(50);// 50
+    // sor.setStddevMulThresh(1.0);
+    // sor.filter(*tmp);
+    // 体素格滤波======
     pcl::VoxelGrid<pcl::PointXYZ> vg;
-    double resolution = 0.02;
+    double resolution = 0.05/2; //todo: use config grid resolution=0.05
     vg.setLeafSize(resolution, resolution, resolution);// 体素格子 尺寸
-    pcl::PointCloud<pcl::PointXYZ>::Ptr mCamPCFiltered( new pcl::PointCloud<pcl::PointXYZ> );
+    pcl::PointCloud<pcl::PointXYZ>::Ptr tmp( new pcl::PointCloud<pcl::PointXYZ> );
     vg.setInputCloud(mCamPC);
-    vg.filter(*mCamPCFiltered);
-    mCamPCFiltered->swap(*mCamPC);
-// 转换到世界坐标下==== no
+    vg.filter(*tmp);
+    tmp->swap(*mCamPC);
+    // 转换到世界坐标下==== no, transform based on KF pose later (may get updated)
     // Eigen::Isometry3d T = ORB_SLAM3::Converter::toSE3Quat( kf->GetPose() );
     // pcl::transformPointCloud( *cloud, mCamPointCloud, T.inverse().matrix());
+    //split ground vs non ground points (can be down only in world coordinate)
 }
 
 } //namespace ORB_SLAM

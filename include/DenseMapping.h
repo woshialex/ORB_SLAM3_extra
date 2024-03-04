@@ -46,6 +46,9 @@ public:
 
     bool CheckNewKeyFrame(){
         unique_lock<mutex> lock(mMutexQueue);
+        if (mKeyFrameQueue.size()>2){
+            printf("Dense Mapping lag behind!!, queue size = %d\n", mKeyFrameQueue.size());
+        }
         return !mKeyFrameQueue.empty();
     }
     void RequestCloseLoop(){

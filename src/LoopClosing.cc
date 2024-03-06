@@ -86,6 +86,11 @@ void LoopClosing::SetLocalMapper(LocalMapping *pLocalMapper)
     mpLocalMapper=pLocalMapper;
 }
 
+void LoopClosing::SetDenseMapper(DenseMapping *pDenseMapper)
+{
+    mpDenseMapper = pDenseMapper;
+}
+
 
 void LoopClosing::Run()
 {
@@ -272,6 +277,7 @@ void LoopClosing::Run()
 
 #endif
                         CorrectLoop();
+                        mpDenseMapper->RequestCloseLoop();
 #ifdef REGISTER_TIMES
                         std::chrono::steady_clock::time_point time_EndLoop = std::chrono::steady_clock::now();
 

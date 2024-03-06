@@ -477,47 +477,34 @@ void MapDrawer::DrawOctoMap()
         std::cout<<"mpDenseMapper == NULL !!!!"<<std::endl;
         return;
     }
-    auto m_octree = mpDenseMapper->getOctree();
-    octomap::OcTree::tree_iterator it  = m_octree->begin_tree();
-    octomap::OcTree::tree_iterator end = m_octree->end_tree();
     int counter = 0;// 计数
     double occ_thresh = 0.8; // 概率阈值 原来 0.9  越大，显示的octomap格子越少
-    int level = 16; // 八叉树地图 深度???
+    // int level = 16; // 八叉树地图 深度???
     glClearColor(1.0f,1.0f,1.0f,1.0f);// 颜色 + 透明度
 
     glDisable(GL_LIGHTING);
     glEnable (GL_BLEND);
-
-    ////DRAW OCTOMAP BEGIN//////
-    // double stretch_factor = 128/(1 - occ_thresh); //1280.0
-// occupancy range in which the displayed cubes can be
-
-    for(; it != end; ++counter, ++it)
+    int max_depth = 16;
+    auto m_octree = mpDenseMapper->getOctreeCopy(); //no need to lock, by copy
+    double minX, minY, minZ, maxX, maxY, maxZ;
+    m_octree.getMetricMin(minX, minY, minZ);
+    m_octree.getMetricMax(maxX, maxY, maxZ);
+    for(auto it=m_octree.begin_tree(max_depth); it != m_octree.end_tree(); ++counter, ++it)
     {
-        if(level != it.getDepth())
-        {
-            continue;
-        }
-        double occ = it->getOccupancy();//占有概率=================
-        if(occ < occ_thresh) // 占有概率较低====不显示
-        {
-            continue;
-        }
-
-        // std::cout<< occ << std::endl;
-
-        double minX, minY, minZ, maxX, maxY, maxZ;
-        m_octree->getMetricMin(minX, minY, minZ);
-        m_octree->getMetricMax(maxX, maxY, maxZ);
-
+       // if(level != it.getDepth()) continue;
+       if(!it.isLeaf())continue;
+       //double occ = it->getOccupancy();//占有概率=================
+       //if(occ < occ_thresh)continue // 占有概率较低====不显示
+       if(!m_octree.isNodeOccupied(*it))continue;
+       // std::cout<< occ << std::endl;
        float halfsize = it.getSize()/2.0;// 半尺寸
        float x = it.getX();
        float y = it.getY();
        float z = it.getZ();
 
-// 高度====
+       // 高度====
        double h = ( std::min(std::max((y-minY)/(maxY-minY), 0.0), 1.0))*0.8;
-// 按高度 计算颜色
+       // 按高度 计算颜色
        double r, g, b;
        heightMapColor(h, r,g,b);
 

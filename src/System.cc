@@ -97,7 +97,7 @@ bool has_suffix(const std::string &str, const std::string &suffix) {
 Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
 
 System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
-               const bool bUseViewer, const int initFr, const string &strSequence, const bool bDenseMapping):
+               const bool bUseViewer, const int initFr, const string &strSequence):
     mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
     mbActivateLocalizationMode(false), mbDeactivateLocalizationMode(false), mbShutDown(false)
 {
@@ -276,8 +276,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         mpLocalMapper->mbFarPoints = false;
 
     //Initialize the Dense mapping thread and launch
-    if(bDenseMapping){
-        mpDenseMapper = new DenseMapping(this, mpAtlas, 0.05); //todo: resolution as parameter
+    if(settings_->doDenseMapping()){
+        mpDenseMapper = new DenseMapping(this, mpAtlas, settings_); //todo: resolution as parameter
         mptDenseMapping = new thread(&ORB_SLAM3::DenseMapping::Run, mpDenseMapper);
         mpMapDrawer->mpDenseMapper = mpDenseMapper;
     }else{
@@ -300,6 +300,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
     mpLoopCloser->SetTracker(mpTracker);
     mpLoopCloser->SetLocalMapper(mpLocalMapper);
+    mpLoopCloser->SetDenseMapper(mpDenseMapper);
 
     //usleep(10*1000*1000);
 

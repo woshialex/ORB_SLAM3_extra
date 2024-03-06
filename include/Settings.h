@@ -112,6 +112,10 @@ namespace ORB_SLAM3 {
         float viewPointF() {return viewPointF_;}
         float imageViewerScale() {return imageViewerScale_;}
 
+        bool doDenseMapping() {return bDenseMapping_;}
+        bool map2D() {return bMap2D_;}
+        float gridSize() {return gridSize_;}
+
         std::string atlasLoadFile() {return sLoadFrom_;}
         std::string atlasSaveFile() {return sSaveto_;}
 
@@ -153,6 +157,7 @@ namespace ORB_SLAM3 {
         void readViewer(cv::FileStorage& fSettings);
         void readLoadAndSave(cv::FileStorage& fSettings);
         void readOtherParameters(cv::FileStorage& fSettings);
+        void readDenseMapping(cv::FileStorage& fSettings);
 
         void precomputeRectificationMaps();
 
@@ -217,6 +222,13 @@ namespace ORB_SLAM3 {
         float cameraLineWidth_;
         float viewPointX_, viewPointY_, viewPointZ_, viewPointF_;
         float imageViewerScale_;
+
+        /*
+        * DenseMapping stuff
+        */
+       bool bDenseMapping_;
+       float gridSize_;
+       bool bMap2D_;
 
         /*
          * Save & load maps

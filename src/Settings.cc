@@ -168,6 +168,8 @@ namespace ORB_SLAM3 {
         cout << "\t-Loaded ORB settings" << endl;
         readViewer(fSettings);
         cout << "\t-Loaded viewer settings" << endl;
+        readDenseMapping(fSettings);
+        cout << "\t-Loaded dense mapping settings" << endl;
         readLoadAndSave(fSettings);
         cout << "\t-Loaded Atlas settings" << endl;
         readOtherParameters(fSettings);
@@ -467,6 +469,16 @@ namespace ORB_SLAM3 {
 
          if(!found)
             imageViewerScale_ = 1.0f;
+    }
+
+    void Settings::readDenseMapping(cv::FileStorage &fSettings) {
+        bool found;
+
+        bDenseMapping_ = (bool)readParameter<int>(fSettings,"DenseMapping.on",found);
+        gridSize_ = readParameter<float>(fSettings,"DenseMapping.gridSize",found);
+        bMap2D_ = (bool)readParameter<int>(fSettings,"DenseMapping.map2D",found);
+        if(!found)
+            bMap2D_ = false;
     }
 
     void Settings::readLoadAndSave(cv::FileStorage &fSettings) {

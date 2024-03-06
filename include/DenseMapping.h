@@ -3,6 +3,7 @@
 
 #include "KeyFrame.h"
 #include "Atlas.h"
+#include "Settings.h"
 #include <mutex>
 
 // octomap
@@ -28,20 +29,33 @@ class DenseMapping
 {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    DenseMapping(System* pSys, Atlas* pAtlas, float resolution):
+    DenseMapping(System* pSys, Atlas* pAtlas, Settings* settings_):
         mpSys(pSys),
         mpAtlas(pAtlas),
-        m_octree(new octomap::OcTree(resolution)){
+        settings(settings_),
+        m_octree(new octomap::OcTree(settings->gridSize())){
             m_octree->setProbHit(0.7);
             m_octree->setProbMiss(0.4);
             m_octree->setClampingThresMax(0.95);
             m_octree->setClampingThresMin(0.05);
+            prevKFpose = Sophus::SE3f::transX(10000.0);
     }
     void Run();
     void InsertKeyFrame(KeyFrame* pKF){
-        unique_lock<mutex> lock(mMutexQueue);
-        if(pKF->mnId!=0)
-            mKeyFrameQueue.push_back(pKF);
+        //avoid inserting too many keyframes so can run faster
+        auto currPose = pKF->GetPoseInverse();
+        //difference between currPose and prevKFpose
+        auto diff = currPose.inverse() * prevKFpose;
+        double t = pKF->mTimeStamp;
+        double dt = t - mTimeStamp;
+        if (diff.translation().norm() < 0.15 && diff.rotationMatrix().eulerAngles(0, 1, 2).norm() < 0.15 && dt>0.0 && dt<0.3)return;
+        {
+            unique_lock<mutex> lock(mMutexQueue);
+            if(pKF->mnId!=0)
+                mKeyFrameQueue.push_back(pKF);
+        }
+        prevKFpose = currPose;
+        mTimeStamp = t;
     }
 
     bool CheckNewKeyFrame(){
@@ -70,16 +84,25 @@ public:
         delete m_octree;
     }
 
-    auto getOctree() { return m_octree; }
-    octomap::Pointcloud getKFGlobalPC(KeyFrame* pKF);
+    auto getOctreeCopy() { 
+        //return a copy of the octree
+        unique_lock<mutex> lock(mMutexOctree);
+        return octomap::OcTree(*m_octree);
+    }
+    octomap::point3d getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud& ground, octomap::Pointcloud& nonground);
+    void InsertScan(const octomap::point3d& sensorOrigin, const octomap::Pointcloud& ground, const octomap::Pointcloud& nonground);
 
 private:
     System* mpSys;
     Atlas* mpAtlas;
+    Settings* settings;
     octomap::OcTree *m_octree;
     bool mbCloseLoop = false;
     std::mutex mMutexQueue, mMutexCloseLoop;
     std::list<KeyFrame*> mKeyFrameQueue;
+    std::mutex mMutexOctree;
+    Sophus::SE3f prevKFpose;
+    double mTimeStamp = 0;
 };
 
 }

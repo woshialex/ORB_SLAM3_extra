@@ -1174,13 +1174,13 @@ void KeyFrame::UpdatePointCloud()
           for ( int n=0; n<(mImDep.cols); n+=1 )//每一列
           {
               float d = mImDep.ptr<float>(m)[n];// 深度 m为单位 
-              if (d < 0.10 || d>8.0) // 相机测量范围, remove out of range point
+              if (d < 0.10 || d>8.0) // 相机测量范围, remove out of range point, todo: keep, it tell us it is empty in the front
                  continue;
               pcl::PointXYZ p;
               p.z = d;
               p.x = ( n - cx) * p.z / fx;
               p.y = ( m - cy) * p.z / fy;
-              if(p.y<-3.0 || p.y>3.0) continue;// 保留 垂直方向 -3～3m范围内的点 
+              // if(p.y<-3.0 || p.y>3.0) continue;// 保留 垂直方向 -3～3m范围内的点 
               //p.b = kf->mImRGB.ptr<uchar>(m)[n*3+0];// 点颜色=====
               //p.g = kf->mImRGB.ptr<uchar>(m)[n*3+1];
               //p.r = kf->mImRGB.ptr<uchar>(m)[n*3+2];

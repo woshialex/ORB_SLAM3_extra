@@ -3,11 +3,14 @@
 namespace ORB_SLAM3
 {
 
-octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
+octomap::point3d DenseMapping::getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud& ground, octomap::Pointcloud& nonground){
+    ground.clear();
+    nonground.clear();
     pKF->SetNotErase();
     auto pc = pKF->GetPointCloud();
     // 转换到世界坐标下====
     Eigen::Isometry3d T = ORB_SLAM3::Converter::toSE3Quat(pKF->GetPose());
+    octomap::point3d sensorOrigin = octomap::point3d(T(0,3), T(1,3), T(2,3));
     pcl::PointCloud<pcl::PointXYZ> temp;
     pcl::transformPointCloud(*pc, temp, T.inverse().matrix());
     pKF->SetErase();
@@ -16,7 +19,7 @@ octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
     // 随机采样一致性 模型分割=====
     if(false)//crash
     {
-        pcl::PointCloud<pcl::PointXYZ> ground, nonground;
+        pcl::PointCloud<pcl::PointXYZ> ground_, nonground_;
         pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients); // 模型系数
         pcl::PointIndices::Ptr inliers(new pcl::PointIndices);                // 点云索引
 
@@ -56,7 +59,7 @@ octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
                        coefficients->values.at(3));
 
                 extract.setNegative(false);
-                extract.filter(ground); // 提取 平面上的点 地面点============
+                extract.filter(ground_); // 提取 平面上的点 地面点============
                 // remove ground points from full pointcloud:
                 // workaround for PCL bug:
                 if (inliers->indices.size() != cloud_filtered.size())
@@ -64,7 +67,7 @@ octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
                     extract.setNegative(true);
                     pcl::PointCloud<pcl::PointXYZ> cloud_out;
                     extract.filter(cloud_out);
-                    nonground += cloud_out; // 无地面的点云
+                    nonground_ += cloud_out; // 无地面的点云
                     cloud_filtered = cloud_out;
                 }
 
@@ -83,7 +86,7 @@ octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
                 pcl::PointCloud<pcl::PointXYZ> cloud_out;
                 extract.setNegative(false);
                 extract.filter(cloud_out);
-                nonground += cloud_out; // 未找到平面，
+                nonground_ += cloud_out; // 未找到平面，
                 if (inliers->indices.size() != cloud_filtered.size())
                 {
                     extract.setNegative(true);
@@ -99,55 +102,166 @@ octomap::Pointcloud DenseMapping::getKFGlobalPC(KeyFrame* pKF) {
 
         } // while
 
-        if (!groundPlaneFound)nonground = temp;
+        if (!groundPlaneFound)nonground_ = temp;
         // todo: make it more efficient, avoid multiple loops
         // Convert pcl::PointCloud to octomap::Pointcloud
-        octomap::Pointcloud octomapCloud;
-        for (const auto& point : nonground.points) {
-            octomapCloud.push_back(point.x, point.y, point.z);
+        for (const auto& point : nonground_.points) {
+            nonground.push_back(point.x, point.y, point.z);
         }
-        return octomapCloud;
+        if(groundPlaneFound)
+            for (const auto& point : ground_.points) {
+                ground.push_back(point.x, point.y, point.z);
+            }
     }else{
     // 这里可以简单剔除掉 y轴方向 > 机器人高度的 点，加速去除平面=======
-        octomap::Pointcloud octomapCloud;
+        bool map_2d = settings->map2D();
         for (const auto& point : temp.points) {
-            if (point.y<-1.5 + 0.1)continue;//tmp
-            octomapCloud.push_back(point.x, point.y, point.z);
+            auto y = point.y;
+            if (y<-0.1)continue;//too high
+            float agent_height = 1.5;
+            if (y>agent_height - 0.1){//ground
+                if(map_2d)y=0.1;
+                else y = agent_height;
+                // ground.push_back(point.x, y, point.z);
+                nonground.push_back(point.x, y, point.z);
+                //ground and nonground need to be pushed into octomap at the same time
+            }else{
+                if(map_2d)y=0.0;
+                nonground.push_back(point.x, y, point.z);
+            }
         }
-        return octomapCloud;
+        //todo: speedup
+        if(map_2d){
+            // 体素格滤波======
+        }
     }
-
+    return sensorOrigin;
 }
 
 void DenseMapping::Run(){
     KeyFrame* pKF = NULL;
-    octomap::point3d origin = octomap::point3d(0,0,0);
+    octomap::Pointcloud ground, nonground;
     while(1){
+        if(isCloseLoop()){
+            std::cout<< " closing loop, rebuild octree" << std::endl;
+            //todo: add timing of this block  
+            {
+                unique_lock<mutex> lock(mMutexOctree);
+                m_octree->clear();
+            }
+            vector<KeyFrame*> vKFs = mpAtlas->GetCurrentMap()->GetAllKeyFrames();
+            {
+                unique_lock<mutex> lock(mMutexQueue);
+                mKeyFrameQueue.clear();
+                int N = vKFs.size();
+                //todo: don't clear and rebuild the updated frames only!!!
+                int step = N/50;//max downsampled to 50 frames total
+                for(int i=0; i<N; i+=step){
+                    mKeyFrameQueue.push_back(vKFs[i]);
+                }
+            }
+            LoopClosed();
+        }
+
         if(CheckNewKeyFrame()){
             {
                 unique_lock<mutex> lock(mMutexQueue);
                 pKF = mKeyFrameQueue.front();
                 mKeyFrameQueue.pop_front();
             }
-            auto octomapCloud = getKFGlobalPC(pKF);
-            m_octree->insertPointCloud(octomapCloud, origin);
-            m_octree->updateInnerOccupancy();//todo: check here
+            auto origin = getKFGlobalPC(pKF, ground, nonground);
+            //lock updating m_octree
+            unique_lock<mutex> lock(mMutexOctree);
+            // m_octree->insertPointCloud(ground, origin);
+            m_octree->insertPointCloud(nonground, origin);
+            // m_octree->updateInnerOccupancy();//for ColorTree
         }
         //todo, add if isNewMap octree.clear
 
-        if(isCloseLoop()){
-            m_octree->clear();
-            vector<KeyFrame*> vKFs = mpAtlas->GetCurrentMap()->GetAllKeyFrames();
-            for (auto pFK: vKFs) {
-                auto octomapCloud = getKFGlobalPC(pFK);
-                m_octree->insertPointCloud(octomapCloud, origin);
-                m_octree->updateInnerOccupancy();
-            }
-            LoopClosed();
-        }
-        usleep(5000);
+        usleep(2000);
     }
 }
+
+void DenseMapping::InsertScan(const octomap::point3d& sensorOrigin, const octomap::Pointcloud& ground, const octomap::Pointcloud& nonground)
+{
+    return;
+
+//     // 坐标转换到 key???
+//     if(!m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMin)||
+//         !m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMax))
+//      {
+//             printf("coulde not generate key for origin\n");
+//      }
+
+//      octomap::KeySet free_cells, occupied_cells;// 空闲格子，占有格子
+
+// // 每一个 地面 点云=======================
+//      for(auto p:ground.points)
+//      {  
+//         octomap::point3d point(p.x, p.y, p.z);
+//         // only clear space (ground points)
+//         if(m_octree->computeRayKeys(sensorOrigin, point, m_keyRay))
+//         {
+//              free_cells.insert(m_keyRay.begin(), m_keyRay.end()); // 地面为空闲格子======
+//              m_octree->averageNodeColor(p.x, p.y, p.z, p.r,p.g, p.b);//颜色
+//         }
+//         octomap::OcTreeKey endKey;
+//         if(m_octree->coordToKeyChecked(point, endKey))
+//         {
+//               updateMinKey(endKey, m_updateBBXMin);
+//               updateMaxKey(endKey, m_updateBBXMax);
+//          }
+//         else
+//         {
+//               printf("could not generator key for endpoint");
+//         }
+//      }
+
+// // 无地面点云====================================
+// // all other points : free on ray, occupied on endpoings:
+//      for(auto p:nonground.points)
+//      {
+//          octomap::point3d point(p.x, p.y, p.z);
+//          //free cell
+//          if(m_octree->computeRayKeys(sensorOrigin, point, m_keyRay))
+//          {
+//             // free_cells.insert(m_keyRay.begin(),m_keyRay.end()); // 非空闲
+//          }
+//          //occupided endpoint
+//          octomap::OcTreeKey key;
+//          if(m_octree->coordToKeyChecked(point, key))
+//          {
+//              occupied_cells.insert(key); // 占有格子======
+//              updateMinKey(key, m_updateBBXMin);
+//              updateMaxKey(key, m_updateBBXMax);
+//              m_octree->averageNodeColor(p.x, p.y, p.z, p.r,p.g, p.b);
+//          }
+
+//      }
+
+//    //  pcl::PointCloud<pcl::PointXYZRGB>observation;
+
+// // 空闲格子====
+//      for(octomap::KeySet::iterator it = free_cells.begin(),
+//                                    end= free_cells.end();
+//                                    it!=end; ++it)
+//      {   
+//          if(occupied_cells.find(*it) == occupied_cells.end())// 占有格子未找到====
+//          {
+//              m_octree->updateNode(*it, false);// 空闲格子====
+//          }
+//      }
+// // 占有格子====
+//      for(octomap::KeySet::iterator it = occupied_cells.begin(),
+//                                    end= occupied_cells.end();
+//                                    it!=end; ++it)
+//      {   
+//          m_octree->updateNode(*it, true);// 占有格子====
+//      }
+
+//      m_octree->prune();
+}
+
 
 
 }

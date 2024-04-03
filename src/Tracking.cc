@@ -45,7 +45,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mState(NO_IMAGES_YET), mSensor(sensor), mTrackedFr(0), mbStep(false),
     mbOnlyTracking(false), mbMapUpdated(false), mbVO(false), mpORBVocabulary(pVoc), mpKeyFrameDB(pKFDB),
     mbReadyToInitializate(false), mpSystem(pSys), mpViewer(NULL), bStepByStep(false),
-    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(5.0),
+    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpAtlas(pAtlas), mnLastRelocFrameId(0), time_recently_lost(100.0),
     mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr), mpLastKeyFrame(static_cast<KeyFrame*>(NULL))
 {
     // Load camera parameters from settings file
@@ -2022,8 +2022,11 @@ void Tracking::Track()
                     {
                         mpSystem->ResetActiveMap();
                         Verbose::PrintMess("Reseting current map...", Verbose::VERBOSITY_NORMAL);
-                    }else
+                    }else{
+                        //std::cout<<"orb3 creates a new map because lost for too long, we don't do it for now!!!!"<<std::endl;
+                        //don't create new map even if we are lost
                         CreateMapInAtlas();
+                    }
 
                     if(mpLastKeyFrame)
                         mpLastKeyFrame = static_cast<KeyFrame*>(NULL);
@@ -2246,9 +2249,10 @@ void Tracking::Track()
             bool bNeedKF = NeedNewKeyFrame();
 
             // Check if we need to insert a new keyframe
+            // change of ORB3 by Qi, to avoid inserting new KeyFrames when tracking lost and avoid creating new map (e.g. when lookin into a wall)
             // if(bNeedKF && bOK)
             if(bNeedKF && (bOK || (mInsertKFsLost && mState==RECENTLY_LOST &&
-                                   (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD))))
+              (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD))))
                 CreateNewKeyFrame();
 
 #ifdef REGISTER_TIMES
@@ -2285,7 +2289,9 @@ void Tracking::Track()
                     return;
                 }
 
-            CreateMapInAtlas();
+                //std::cout<<"orb3 creates a new map because lost for too long, we don't do it for now!!!!"<<std::endl;
+                //don't create new map even if we are lost
+                CreateMapInAtlas();
 
             return;
         }
@@ -3070,6 +3076,8 @@ bool Tracking::NeedNewKeyFrame()
         if (mSensor == System::IMU_MONOCULAR && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
             return true;
         else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD) && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
+        //edit by Qi, maybe use distance or angle change from tracking thread to trigger instead of 0.25s time
+        //else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD))
             return true;
         else
             return false;

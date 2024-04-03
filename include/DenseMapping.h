@@ -48,7 +48,8 @@ public:
         auto diff = currPose.inverse() * prevKFpose;
         double t = pKF->mTimeStamp;
         double dt = t - mTimeStamp;
-        if (diff.translation().norm() < 0.15 && diff.rotationMatrix().eulerAngles(0, 1, 2).norm() < 0.15 && dt>0.0 && dt<0.3)return;
+        if(dt<0.01)return;
+        if (diff.translation().norm() < 0.40 && diff.rotationMatrix().eulerAngles(0, 1, 2).norm() < 3.14/8 && dt<0.1)return;
         {
             unique_lock<mutex> lock(mMutexQueue);
             if(pKF->mnId!=0)
@@ -60,11 +61,17 @@ public:
 
     bool CheckNewKeyFrame(){
         unique_lock<mutex> lock(mMutexQueue);
-        if (mKeyFrameQueue.size()>2){
+        if (mKeyFrameQueue.size()>3){
             printf("Dense Mapping lag behind!!, queue size = %d\n", mKeyFrameQueue.size());
         }
         return !mKeyFrameQueue.empty();
     }
+
+    void EmptyQueue(){
+        unique_lock<mutex> lock(mMutexQueue);
+        mKeyFrameQueue.clear();
+    }
+
     void RequestCloseLoop(){
         unique_lock<mutex> lock(mMutexCloseLoop);
         mbCloseLoop = true;

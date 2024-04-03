@@ -69,3 +69,7 @@ Viewer.ViewpointY: -0.7
 Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
+##Octomap Dense Mapping
+DenseMapping.on: 1
+DenseMapping.gridSize: 0.05
+DenseMapping.map2D: 0

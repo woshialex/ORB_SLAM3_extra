@@ -9,10 +9,12 @@ octomap::point3d DenseMapping::getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud&
     pKF->SetNotErase();
     auto pc = pKF->GetPointCloud();
     // 转换到世界坐标下====
-    Eigen::Isometry3d T = ORB_SLAM3::Converter::toSE3Quat(pKF->GetPose());
-    octomap::point3d sensorOrigin = octomap::point3d(T(0,3), T(1,3), T(2,3));
+    Eigen::Isometry3d T = ORB_SLAM3::Converter::toSE3Quat(pKF->GetPoseInverse());
     pcl::PointCloud<pcl::PointXYZ> temp;
-    pcl::transformPointCloud(*pc, temp, T.inverse().matrix());
+    pcl::transformPointCloud(*pc, temp, T.matrix());
+    octomap::point3d sensorOrigin = octomap::point3d(T(0,3), T(1,3), T(2,3));
+    //auto Tw = T.inverse();
+    //octomap::point3d sensorOrigin = octomap::point3d(Tw(0,3), Tw(1,3), Tw(2,3));
     pKF->SetErase();
 
     // split ground and nonground points
@@ -122,8 +124,8 @@ octomap::point3d DenseMapping::getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud&
             if (y>agent_height - 0.1){//ground
                 if(map_2d)y=0.1;
                 else y = agent_height;
-                // ground.push_back(point.x, y, point.z);
-                nonground.push_back(point.x, y, point.z);
+                ground.push_back(point.x, y, point.z);
+                // nonground.push_back(point.x, y, point.z);
                 //ground and nonground need to be pushed into octomap at the same time
             }else{
                 if(map_2d)y=0.0;
@@ -155,7 +157,7 @@ void DenseMapping::Run(){
                 mKeyFrameQueue.clear();
                 int N = vKFs.size();
                 //todo: don't clear and rebuild the updated frames only!!!
-                int step = N/50;//max downsampled to 50 frames total
+                int step = N/30;//max downsampled to 30 frames total
                 for(int i=0; i<N; i+=step){
                     mKeyFrameQueue.push_back(vKFs[i]);
                 }

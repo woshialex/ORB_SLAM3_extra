@@ -3075,12 +3075,18 @@ bool Tracking::NeedNewKeyFrame()
     {
         if (mSensor == System::IMU_MONOCULAR && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
             return true;
-        else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD) && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
+        //else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD) && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
         //edit by Qi, maybe use distance or angle change from tracking thread to trigger instead of 0.25s time
+        else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)){
+            auto diff = mCurrentFrame.GetPose() * mpLastKeyFrame->GetPose().inverse();
+            if((mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25 && 
+                diff.translation().norm() < 0.20 && diff.rotationMatrix().eulerAngles(0, 1, 2).norm() < 3.14/12)
+                return true;
+        }
         //else if ((mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD))
             return true;
-        else
-            return false;
+        
+        return false;
     }
 
     if(mbOnlyTracking)

@@ -3,146 +3,58 @@
 namespace ORB_SLAM3
 {
 
-octomap::point3d DenseMapping::getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud& ground, octomap::Pointcloud& nonground){
+void simple_ground_filter(const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground){
+        pcl::PassThrough<pcl::PointXYZ> simple_filter;
+        simple_filter.setFilterFieldName("y");
+        simple_filter.setFilterLimits(-0.1, 100);
+        simple_filter.setInputCloud(pc.makeShared());
+        simple_filter.filter(ground);
+        simple_filter.setNegative(true);
+        simple_filter.filter(nonground);
+}
+
+octomap::point3d DenseMapping::getKFGlobalPC(KeyFrame* pKF, PCLPointCloud& ground, PCLPointCloud& nonground){
     ground.clear();
     nonground.clear();
     pKF->SetNotErase();
-    auto pc = pKF->GetPointCloud();
-    // 转换到世界坐标下====
+    auto tmp = pKF->GetPointCloud();
+    // 转换到世界坐标下==== (y==down, x==right, z==forward)
     Eigen::Isometry3d T = ORB_SLAM3::Converter::toSE3Quat(pKF->GetPoseInverse());
-    pcl::PointCloud<pcl::PointXYZ> temp;
-    pcl::transformPointCloud(*pc, temp, T.matrix());
+    PCLPointCloud pc;
+    float agent_height = settings->camHeight(); //must use the correct robot height
+    //for easier processing ground, shift agent height to -height so ground is at y==0 (point down)
+    T(1,3) -= agent_height;
+    pcl::transformPointCloud(*tmp, pc, T.matrix());
     octomap::point3d sensorOrigin = octomap::point3d(T(0,3), T(1,3), T(2,3));
     //auto Tw = T.inverse();
     //octomap::point3d sensorOrigin = octomap::point3d(Tw(0,3), Tw(1,3), Tw(2,3));
     pKF->SetErase();
 
+    //may filter pc based on x,y,z bounding box and remove NaNs 
+    pcl::PassThrough<pcl::PointXYZ> simple_filter;
+    simple_filter.setFilterFieldName("y");
+    simple_filter.setFilterLimits(-agent_height-0.1, 0.1);
+    simple_filter.setInputCloud(pc.makeShared());
+    simple_filter.filter(pc);
+    //using filter pcl::PassThrough<pcl::PointXYZ> pass;
+
     // split ground and nonground points
-    // 随机采样一致性 模型分割=====
-    if(false)//crash
+    if(settings->simpleGround())
     {
-        pcl::PointCloud<pcl::PointXYZ> ground_, nonground_;
-        pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients); // 模型系数
-        pcl::PointIndices::Ptr inliers(new pcl::PointIndices);                // 点云索引
-
-        pcl::SACSegmentation<pcl::PointCloud<pcl::PointXYZ>::PointType> seg; // 分割
-        seg.setOptimizeCoefficients(true);                                      // 优化系数
-        seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);                    // 分割 平面
-        seg.setMethodType(pcl::SAC_RANSAC);                                     // 随机采样一致性 分割
-        seg.setMaxIterations(200);                                              // 迭代 200次
-        seg.setDistanceThreshold(0.04);                                         // 距离阈值
-        seg.setAxis(Eigen::Vector3f(0, 1, 0));                                  // xz 平面中的 平面点云 y方向轴====
-        seg.setEpsAngle(0.5);
-
-        pcl::PointCloud<pcl::PointXYZ> cloud_filtered(temp); // 分割前的点云===
-        pcl::ExtractIndices<pcl::PointCloud<pcl::PointXYZ>::PointType> extract;
-        bool groundPlaneFound = false;                          // 地 平面找到 标志
-        while (cloud_filtered.size() > 10 && !groundPlaneFound) // 地平面未找到
-        {
-            seg.setInputCloud(cloud_filtered.makeShared()); // 分割器输入点云
-            seg.segment(*inliers, *coefficients);           // 分割
-            if (inliers->indices.size() == 0)
-            {
-                break;
-            }
-            extract.setInputCloud(cloud_filtered.makeShared()); // 点云提取器
-            extract.setIndices(inliers);
-
-            // a*X + b*Y + c*Z + d = 0;
-            if (std::abs(coefficients->values.at(3)) > 0.07) // 系数什么含义??
-            {
-
-                printf("Ground plane found: %zu/%zu inliers. Coeff: %f %f %f %f \n",
-                       inliers->indices.size(),
-                       cloud_filtered.size(),
-                       coefficients->values.at(0),
-                       coefficients->values.at(1),
-                       coefficients->values.at(2),
-                       coefficients->values.at(3));
-
-                extract.setNegative(false);
-                extract.filter(ground_); // 提取 平面上的点 地面点============
-                // remove ground points from full pointcloud:
-                // workaround for PCL bug:
-                if (inliers->indices.size() != cloud_filtered.size())
-                {
-                    extract.setNegative(true);
-                    pcl::PointCloud<pcl::PointXYZ> cloud_out;
-                    extract.filter(cloud_out);
-                    nonground_ += cloud_out; // 无地面的点云
-                    cloud_filtered = cloud_out;
-                }
-
-                groundPlaneFound = true;
-            }
-            else
-            {
-                printf("Horizontal plane (not ground) found: %zu/%zu inliers. Coeff: %f %f %f %f \n",
-                       inliers->indices.size(),
-                       cloud_filtered.size(),
-                       coefficients->values.at(0),
-                       coefficients->values.at(1),
-                       coefficients->values.at(2),
-                       coefficients->values.at(3));
-
-                pcl::PointCloud<pcl::PointXYZ> cloud_out;
-                extract.setNegative(false);
-                extract.filter(cloud_out);
-                nonground_ += cloud_out; // 未找到平面，
-                if (inliers->indices.size() != cloud_filtered.size())
-                {
-                    extract.setNegative(true);
-                    cloud_out.points.clear();
-                    extract.filter(cloud_out);
-                    cloud_filtered = cloud_out;
-                }
-                else
-                {
-                    cloud_filtered.points.clear();
-                }
-            }
-
-        } // while
-
-        if (!groundPlaneFound)nonground_ = temp;
-        // todo: make it more efficient, avoid multiple loops
-        // Convert pcl::PointCloud to octomap::Pointcloud
-        for (const auto& point : nonground_.points) {
-            nonground.push_back(point.x, point.y, point.z);
-        }
-        if(groundPlaneFound)
-            for (const auto& point : ground_.points) {
-                ground.push_back(point.x, point.y, point.z);
-            }
+        // 这里可以简单剔除掉 y轴方向 > 机器人高度的 点，加速去除平面=======
+        //take ground and nonground points from pointcloud based on it's height
+        simple_ground_filter(pc, ground, nonground);
     }else{
-    // 这里可以简单剔除掉 y轴方向 > 机器人高度的 点，加速去除平面=======
-        bool map_2d = settings->map2D();
-        for (const auto& point : temp.points) {
-            auto y = point.y;
-            if (y<-0.1)continue;//too high
-            float agent_height = 1.5;
-            if (y>agent_height - 0.1){//ground
-                if(map_2d)y=0.1;
-                else y = agent_height;
-                ground.push_back(point.x, y, point.z);
-                // nonground.push_back(point.x, y, point.z);
-                //ground and nonground need to be pushed into octomap at the same time
-            }else{
-                if(map_2d)y=0.0;
-                nonground.push_back(point.x, y, point.z);
-            }
-        }
-        //todo: speedup
-        if(map_2d){
-            // 体素格滤波======
-        }
+        FilterGroundPlane(pc, ground, nonground);
+    }
+    if(settings->map2D()){
     }
     return sensorOrigin;
 }
 
 void DenseMapping::Run(){
     KeyFrame* pKF = NULL;
-    octomap::Pointcloud ground, nonground;
+    PCLPointCloud ground, nonground;
     while(1){
         if(isCloseLoop()){
             std::cout<< " closing loop, rebuild octree" << std::endl;
@@ -174,9 +86,10 @@ void DenseMapping::Run(){
             auto origin = getKFGlobalPC(pKF, ground, nonground);
             //lock updating m_octree
             unique_lock<mutex> lock(mMutexOctree);
-            // m_octree->insertPointCloud(ground, origin);
-            m_octree->insertPointCloud(nonground, origin);
-            // m_octree->updateInnerOccupancy();//for ColorTree
+            //m_octree->insertPointCloud(nonground, origin);
+            InsertScan(origin, ground, nonground);
+            ground.clear();
+            nonground.clear();
         }
         //todo, add if isNewMap octree.clear
 
@@ -184,86 +97,185 @@ void DenseMapping::Run(){
     }
 }
 
-void DenseMapping::InsertScan(const octomap::point3d& sensorOrigin, const octomap::Pointcloud& ground, const octomap::Pointcloud& nonground)
+void DenseMapping::InsertScan(const octomap::point3d& sensorOrigin, 
+    const PCLPointCloud &ground, const PCLPointCloud &nonground)
 {
-    return;
+    // 坐标转换到 key???
+    if(!m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMin)||
+        !m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMax))
+     {
+            printf("coulde not generate key for origin\n");
+     }
 
-//     // 坐标转换到 key???
-//     if(!m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMin)||
-//         !m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMax))
-//      {
-//             printf("coulde not generate key for origin\n");
-//      }
+     octomap::KeySet free_cells, occupied_cells;
 
-//      octomap::KeySet free_cells, occupied_cells;// 空闲格子，占有格子
+    // insert ground points only as free:
+    for (auto it = ground.begin(); it != ground.end(); ++it) {
+        octomap::point3d point(it->x, it->y, it->z);
+        // maxrange check
+        if ((m_maxRange > 0.0) && ((point - sensorOrigin).norm() > m_maxRange) ) {
+            point = sensorOrigin + (point - sensorOrigin).normalized() * m_maxRange;
+        }
 
-// // 每一个 地面 点云=======================
-//      for(auto p:ground.points)
-//      {  
-//         octomap::point3d point(p.x, p.y, p.z);
-//         // only clear space (ground points)
-//         if(m_octree->computeRayKeys(sensorOrigin, point, m_keyRay))
-//         {
-//              free_cells.insert(m_keyRay.begin(), m_keyRay.end()); // 地面为空闲格子======
-//              m_octree->averageNodeColor(p.x, p.y, p.z, p.r,p.g, p.b);//颜色
-//         }
-//         octomap::OcTreeKey endKey;
-//         if(m_octree->coordToKeyChecked(point, endKey))
-//         {
-//               updateMinKey(endKey, m_updateBBXMin);
-//               updateMaxKey(endKey, m_updateBBXMax);
-//          }
-//         else
-//         {
-//               printf("could not generator key for endpoint");
-//         }
-//      }
+        // only clear space (ground points)
+        if (m_octree->computeRayKeys(sensorOrigin, point, m_keyRay)) {
+            free_cells.insert(m_keyRay.begin(), m_keyRay.end());
+        } 
 
-// // 无地面点云====================================
-// // all other points : free on ray, occupied on endpoings:
-//      for(auto p:nonground.points)
-//      {
-//          octomap::point3d point(p.x, p.y, p.z);
-//          //free cell
-//          if(m_octree->computeRayKeys(sensorOrigin, point, m_keyRay))
-//          {
-//             // free_cells.insert(m_keyRay.begin(),m_keyRay.end()); // 非空闲
-//          }
-//          //occupided endpoint
-//          octomap::OcTreeKey key;
-//          if(m_octree->coordToKeyChecked(point, key))
-//          {
-//              occupied_cells.insert(key); // 占有格子======
-//              updateMinKey(key, m_updateBBXMin);
-//              updateMaxKey(key, m_updateBBXMax);
-//              m_octree->averageNodeColor(p.x, p.y, p.z, p.r,p.g, p.b);
-//          }
+        octomap::OcTreeKey endKey;
+        if (m_octree->coordToKeyChecked(point, endKey)) {
+            updateMinKey(endKey, m_updateBBXMin);
+            updateMaxKey(endKey, m_updateBBXMax);
+        } else {
+              printf("could not generator key for endpoint");
+        }
+    } 
 
-//      }
+    // all other points: free on ray, occupied on endpoint:
+    for (auto it = nonground.begin(); it != nonground.end(); ++it) {
+        octomap::point3d point(it->x, it->y, it->z);
+        // maxrange check            
+        if ((m_maxRange < 0.0) || ((point - sensorOrigin).norm() <= m_maxRange)) {
+            // free cells
+            if (m_octree->computeRayKeys(sensorOrigin, point, m_keyRay)) {
+                free_cells.insert(m_keyRay.begin(), m_keyRay.end());
+            }
+            // occupied endpoint
+            octomap::OcTreeKey key;
+            if (m_octree->coordToKeyChecked(point, key)) {
+                occupied_cells.insert(key);
+                updateMinKey(key, m_updateBBXMin);
+                updateMaxKey(key, m_updateBBXMax); 
+            }
+        } else {
+            // ray longer than maxrange:;  
+            octomap::point3d new_end = sensorOrigin +
+                (point - sensorOrigin).normalized() * m_maxRange;
+            if (m_octree->computeRayKeys(sensorOrigin, new_end, m_keyRay)) {
+                free_cells.insert(m_keyRay.begin(), m_keyRay.end());
+                octomap::OcTreeKey endKey;
+                if (m_octree->coordToKeyChecked(new_end, endKey)) {
+                    free_cells.insert(endKey);
+                    updateMinKey(endKey, m_updateBBXMin);
+                    updateMaxKey(endKey, m_updateBBXMax);
+                } else {
+                    printf("could not generator key for endpoint");
+                }
+            }
+        }
+    }
+    // mark free cells only if not seen occupied in this cloud
+    for(auto it = free_cells.begin(), end=free_cells.end();
+        it!= end; ++it){
+        if (occupied_cells.find(*it) == occupied_cells.end()){
+            m_octree->updateNode(*it, false);
+        }
+    }
 
-//    //  pcl::PointCloud<pcl::PointXYZRGB>observation;
-
-// // 空闲格子====
-//      for(octomap::KeySet::iterator it = free_cells.begin(),
-//                                    end= free_cells.end();
-//                                    it!=end; ++it)
-//      {   
-//          if(occupied_cells.find(*it) == occupied_cells.end())// 占有格子未找到====
-//          {
-//              m_octree->updateNode(*it, false);// 空闲格子====
-//          }
-//      }
-// // 占有格子====
-//      for(octomap::KeySet::iterator it = occupied_cells.begin(),
-//                                    end= occupied_cells.end();
-//                                    it!=end; ++it)
-//      {   
-//          m_octree->updateNode(*it, true);// 占有格子====
-//      }
-
-//      m_octree->prune();
+    // now mark all occupied cells:
+    for (auto it = occupied_cells.begin(),
+                end=occupied_cells.end(); it!= end; it++) {
+        m_octree->updateNode(*it, true);
+    }
+     m_octree->prune();
 }
 
+void DenseMapping::FilterGroundPlane(const PCLPointCloud& pc, 
+    PCLPointCloud& ground, PCLPointCloud& nonground) const{
+        ground.header = pc.header;
+        nonground.header = pc.header;
 
+        float m_groundFilterDistance = 0.05;
+        float m_groundFilterAngle = 0.15;
+        float m_groundFilterPlaneDistance = 0.07;
+
+        if (pc.size() < 50){
+            printf("Pointcloud is too small, skipping ground plane extraction");
+            simple_ground_filter(pc, ground, nonground);
+        } else {
+            // plane detection for ground plane removal:
+            pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+            pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+
+            // Create the segmentation object and set up:
+            pcl::SACSegmentation<pcl::PointXYZ> seg;
+            seg.setOptimizeCoefficients (true);
+            // TODO:
+            // maybe a filtering based on the surface normals might be more robust / accurate?
+            seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
+            seg.setMethodType(pcl::SAC_RANSAC);
+            seg.setMaxIterations(100);
+            seg.setDistanceThreshold (m_groundFilterDistance);
+            //seg.setAxis(Eigen::Vector3f(0, 0, 1));
+            seg.setAxis(Eigen::Vector3f(0, -1, 0));
+            seg.setEpsAngle(m_groundFilterAngle);
+
+            PCLPointCloud cloud_filtered(pc);
+            // Create the filtering object
+            pcl::ExtractIndices<pcl::PointXYZ> extract;
+            bool groundPlaneFound = false;
+
+            while (cloud_filtered.size() > 10 && !groundPlaneFound) {
+                seg.setInputCloud(cloud_filtered.makeShared());
+                seg.segment (*inliers, *coefficients);
+                if (inliers->indices.size () == 0) {
+                    //printf("PCL segmentation did not find any plane.\n");
+                    break;
+                }
+
+                extract.setInputCloud(cloud_filtered.makeShared());
+                extract.setIndices(inliers);
+
+                if (std::abs(coefficients->values.at(3)) < m_groundFilterPlaneDistance) {
+                        // printf("Ground plane found: %zu/%zu inliers. Coeff: %f %f %f %f \n",
+                        // inliers->indices.size(), cloud_filtered.size(),
+                        // coefficients->values.at(0), coefficients->values.at(1),
+                        // coefficients->values.at(2), coefficients->values.at(3));
+                    extract.setNegative(false);
+                    extract.filter(ground);
+
+                    // remove ground points from full pointcloud:
+                    // workaround for PCL bug:
+                    if(inliers->indices.size() != cloud_filtered.size()) {
+                        extract.setNegative(true);
+                        //PCLPointCloud cloud_out; //bug when doing assignement
+                        //extract.filter(cloud_out);
+                        //nonground += cloud_out;
+                        //cloud_filtered = cloud_out;
+                        cloud_filtered.points.clear();
+                        extract.filter(cloud_filtered);
+                        nonground += cloud_filtered;
+                    }
+                    groundPlaneFound = true;
+                } else {
+                    // printf("Horizontal plane (not ground) found: %zu/%zu inliers. Coeff: %f %f %f %f\n",
+                    //             inliers->indices.size(), cloud_filtered.size(),
+                    //           coefficients->values.at(0), coefficients->values.at(1),
+                    //             coefficients->values.at(2), coefficients->values.at(3));
+                    extract.setNegative (false);
+                    //PCLPointCloud cloud_out;
+                    //extract.filter(cloud_out);
+                    //nonground +=cloud_out;
+                    extract.filter(nonground);
+
+                    // remove current plane from scan for next iteration:
+                    // workaround for PCL bug:
+                    if(inliers->indices.size() != cloud_filtered.size()){
+                        extract.setNegative(true);
+                        cloud_filtered.points.clear();
+                        extract.filter(cloud_filtered);
+                    } else{
+                        cloud_filtered.points.clear();
+                    }
+                }
+            }
+            // TODO: also do this if overall starting pointcloud too small?
+            if (!groundPlaneFound){ // no plane found or remaining points too small
+                // printf("No ground plane found in scan. \n");
+                // do a rough fitlering on height to prevent spurious obstacles
+                simple_ground_filter(pc, ground, nonground);
+            }
+        }
+    }
 
 }

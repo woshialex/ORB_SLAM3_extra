@@ -479,6 +479,9 @@ namespace ORB_SLAM3 {
         bMap2D_ = (bool)readParameter<int>(fSettings,"DenseMapping.map2D",found);
         if(!found)
             bMap2D_ = false;
+        camHeight_ = readParameter<float>(fSettings,"DenseMapping.camHeight",found);
+        maxRange_ = readParameter<float>(fSettings,"DenseMapping.maxRange",found);
+        bSimple_ = (bool)readParameter<int>(fSettings,"DenseMapping.simpleGround",found);
     }
 
     void Settings::readLoadAndSave(cv::FileStorage &fSettings) {

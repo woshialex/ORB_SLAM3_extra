@@ -115,6 +115,9 @@ namespace ORB_SLAM3 {
         bool doDenseMapping() {return bDenseMapping_;}
         bool map2D() {return bMap2D_;}
         float gridSize() {return gridSize_;}
+        float camHeight() {return camHeight_;}
+        float maxRange() {return maxRange_;}
+        bool simpleGround(){return bSimple_;}
 
         std::string atlasLoadFile() {return sLoadFrom_;}
         std::string atlasSaveFile() {return sSaveto_;}
@@ -229,6 +232,9 @@ namespace ORB_SLAM3 {
        bool bDenseMapping_;
        float gridSize_;
        bool bMap2D_;
+       bool bSimple_;
+       float camHeight_;
+       float maxRange_;
 
         /*
          * Save & load maps

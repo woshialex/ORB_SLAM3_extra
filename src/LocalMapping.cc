@@ -254,7 +254,7 @@ void LocalMapping::Run()
 
             mpLoopCloser->InsertKeyFrame(mpCurrentKeyFrame);
             if(mpDenseMapper!=nullptr)
-                mpDenseMapper->InsertKeyFrame(mpCurrentKeyFrame);//todo: if loopcloser rebuild the full octo dense map
+                mpDenseMapper->InsertKeyFrame(mpCurrentKeyFrame);
 
 #ifdef REGISTER_TIMES
             std::chrono::steady_clock::time_point time_EndLocalMap = std::chrono::steady_clock::now();

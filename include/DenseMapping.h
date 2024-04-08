@@ -21,6 +21,8 @@
 #include <pcl/segmentation/sac_segmentation.h>// 采样一致性分割
 #include <pcl/filters/extract_indices.h>// 提取点晕索引
 
+using PCLPointCloud = pcl::PointCloud<pcl::PointXYZ>;
+
 namespace ORB_SLAM3
 {
 
@@ -38,7 +40,10 @@ public:
             m_octree->setProbMiss(0.4);
             m_octree->setClampingThresMax(0.95);
             m_octree->setClampingThresMin(0.05);
+            m_treeDepth = m_octree->getTreeDepth();
+            m_maxTreeDepth = m_treeDepth;
             prevKFpose = Sophus::SE3f::transX(10000.0);
+            m_maxRange = settings->maxRange();
     }
     void Run();
     void InsertKeyFrame(KeyFrame* pKF){
@@ -96,8 +101,36 @@ public:
         unique_lock<mutex> lock(mMutexOctree);
         return octomap::OcTree(*m_octree);
     }
-    octomap::point3d getKFGlobalPC(KeyFrame* pKF, octomap::Pointcloud& ground, octomap::Pointcloud& nonground);
-    void InsertScan(const octomap::point3d& sensorOrigin, const octomap::Pointcloud& ground, const octomap::Pointcloud& nonground);
+
+    octomap::point3d getKFGlobalPC(KeyFrame *pKF, PCLPointCloud &ground, PCLPointCloud &nonground);
+    void InsertScan(const octomap::point3d &sensorOrigin, const PCLPointCloud &ground, const PCLPointCloud &nonground);
+    void FilterGroundPlane( const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const;
+    /// Test if key is within update area of map (2D, ignores height)
+    inline bool isInUpdateBBX(const octomap::OcTree::iterator &it) const
+    {
+        // 2^(tree_depth-depth) voxels wide:
+        unsigned voxelWidth = (1 << (m_maxTreeDepth - it.getDepth()));
+        octomap::OcTreeKey key = it.getIndexKey(); // lower corner of voxel
+        return (key[0] + voxelWidth >= m_updateBBXMin[0] && key[1] + voxelWidth >= m_updateBBXMin[1] && key[0] <= m_updateBBXMax[0] && key[1] <= m_updateBBXMax[1]);
+    }
+
+    inline static void updateMinKey(const octomap::OcTreeKey &in,
+                                    octomap::OcTreeKey &min)
+    {
+        for (unsigned i = 0; i < 3; ++i)
+        {
+            min[i] = std::min(in[i], min[i]);
+        }
+    };
+
+    inline static void updateMaxKey(const octomap::OcTreeKey &in,
+                                    octomap::OcTreeKey &max)
+    {
+        for (unsigned i = 0; i < 3; ++i)
+        {
+            max[i] = std::max(in[i], max[i]);
+        }
+    };
 
 private:
     System* mpSys;
@@ -110,6 +143,14 @@ private:
     std::mutex mMutexOctree;
     Sophus::SE3f prevKFpose;
     double mTimeStamp = 0;
+
+    octomap::KeyRay m_keyRay;  // temp storage for ray casting
+    octomap::OcTreeKey m_updateBBXMin;
+    octomap::OcTreeKey m_updateBBXMax;
+    unsigned m_treeDepth;
+    unsigned m_maxTreeDepth;
+    double m_maxRange;
+
 };
 
 }

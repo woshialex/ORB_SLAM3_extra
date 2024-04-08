@@ -27,6 +27,89 @@ namespace ORB_SLAM3
 {
 
 class System;
+
+
+//2D occupany grid map
+struct GridMap{
+    GridMap():GridMap(200, 200, 0.5){}
+    GridMap(int width, int height, double res):data(width* height, -1){
+        m_width = width;
+        m_height = height;
+        m_res = res;
+        m_minx = -m_width/2.0 * m_res;
+        m_miny = -m_height/2.0 * m_res;
+    }
+
+    void check_update(double x_min, double y_min, double x_max, double y_max){
+        //map grows out of bondary, then needs to create a new map and update
+        if(x_min<=m_minx || x_max>=m_minx+m_width*m_res || y_min<=m_miny || y_max>=m_miny+m_height*m_res){
+            std::cout<<"expaneded occ map!"<<std::endl;
+            int II = int(D/m_res);
+            if(x_min<=m_minx){
+                int old_width = m_width;
+                m_minx = x_min - II*m_res;
+                m_width += II;
+                //make a deep copy of data
+                std::vector<short> copy(data);
+                data.resize(m_width * m_height);
+                data.assign(data.size(), -1);
+                for(int j=0; j < m_height; j++){
+                    for (int i = II; i < m_width; i++){
+                        data[idx(i, j)] = copy[j*old_width + i -II];
+                    }
+                }
+            }
+            if(x_max>=m_minx+m_width*m_res){
+                int old_width = m_width;
+                m_width += II;
+                std::vector<short> copy(data);
+                data.resize(m_width * m_height);
+                data.assign(data.size(), -1);
+                for(int j=0; j < m_height; j++){
+                    for (int i = 0; i < m_width-II; i++){
+                        data[idx(i, j)] = copy[j*old_width+i];
+                    }
+                }
+            }
+            if(y_min<=m_miny){
+                m_miny = y_min - II*m_res;
+                m_height += II;
+                std::vector<short> copy(data);
+                data.resize(m_width * m_height);
+                data.assign(data.size(), -1);
+                for(int j=II; j < m_height; j++){
+                    for (int i = 0; i < m_width; i++){
+                        data[idx(i, j)] = copy[idx(i, j-II)];
+                    }
+                }
+            }
+            if(y_max>=m_miny+m_height*m_res){
+                m_height += II;
+                std::vector<short> copy(data);
+                data.resize(m_width * m_height);
+                data.assign(data.size(), -1);
+                for(int j=0; j < m_height-II; j++){
+                    for (int i = 0; i < m_width; i++){
+                        data[idx(i, j)] = copy[idx(i, j)];
+                    }
+                }
+            }
+        }
+    }
+    void clear(){
+        data.assign(data.size(), -1);
+    }
+
+    inline unsigned idx(int i, int j) const{
+        return m_width * j + i;
+    }
+    int m_width, m_height;
+    double m_res;//resolution
+    double m_minx, m_miny;
+    std::vector<short> data;
+    const double D = 5.0;
+};
+
 class DenseMapping
 {
 public:
@@ -35,13 +118,13 @@ public:
         mpSys(pSys),
         mpAtlas(pAtlas),
         settings(settings_),
-        m_octree(new octomap::OcTree(settings->gridSize())){
+        m_octree(new octomap::OcTree(settings->gridSize())),
+        m_gridmap(400, 400, settings->gridSize()){
             m_octree->setProbHit(0.7);
             m_octree->setProbMiss(0.4);
             m_octree->setClampingThresMax(0.95);
             m_octree->setClampingThresMin(0.05);
             m_treeDepth = m_octree->getTreeDepth();
-            m_maxTreeDepth = m_treeDepth;
             prevKFpose = Sophus::SE3f::transX(10000.0);
             m_maxRange = settings->maxRange();
     }
@@ -105,11 +188,13 @@ public:
     octomap::point3d getKFGlobalPC(KeyFrame *pKF, PCLPointCloud &ground, PCLPointCloud &nonground);
     void InsertScan(const octomap::point3d &sensorOrigin, const PCLPointCloud &ground, const PCLPointCloud &nonground);
     void FilterGroundPlane( const PCLPointCloud& pc, PCLPointCloud& ground, PCLPointCloud& nonground) const;
+    void update2DMap(const octomap::OcTree::iterator& it, bool occupied, octomap::OcTreeKey minKey);
+    void build2DMap();
     /// Test if key is within update area of map (2D, ignores height)
     inline bool isInUpdateBBX(const octomap::OcTree::iterator &it) const
     {
         // 2^(tree_depth-depth) voxels wide:
-        unsigned voxelWidth = (1 << (m_maxTreeDepth - it.getDepth()));
+        unsigned voxelWidth = (1 << (m_treeDepth - it.getDepth()));
         octomap::OcTreeKey key = it.getIndexKey(); // lower corner of voxel
         return (key[0] + voxelWidth >= m_updateBBXMin[0] && key[1] + voxelWidth >= m_updateBBXMin[1] && key[0] <= m_updateBBXMax[0] && key[1] <= m_updateBBXMax[1]);
     }
@@ -121,7 +206,7 @@ public:
         {
             min[i] = std::min(in[i], min[i]);
         }
-    };
+    }
 
     inline static void updateMaxKey(const octomap::OcTreeKey &in,
                                     octomap::OcTreeKey &max)
@@ -130,13 +215,16 @@ public:
         {
             max[i] = std::max(in[i], max[i]);
         }
-    };
+    }
+
+    GridMap& get2DOccMap() { return m_gridmap;}
 
 private:
     System* mpSys;
     Atlas* mpAtlas;
     Settings* settings;
     octomap::OcTree *m_octree;
+    GridMap m_gridmap;
     bool mbCloseLoop = false;
     std::mutex mMutexQueue, mMutexCloseLoop;
     std::list<KeyFrame*> mKeyFrameQueue;
@@ -148,9 +236,7 @@ private:
     octomap::OcTreeKey m_updateBBXMin;
     octomap::OcTreeKey m_updateBBXMax;
     unsigned m_treeDepth;
-    unsigned m_maxTreeDepth;
     double m_maxRange;
-
 };
 
 }

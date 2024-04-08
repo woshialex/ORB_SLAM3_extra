@@ -1669,5 +1669,14 @@ string System::CalculateCheckSum(string filename, int type)
     return checksum;
 }
 
+GridMap& System::Get2DOccMap(){
+    if(mpDenseMapper)
+        return mpDenseMapper->get2DOccMap();
+    else{
+        std::cout<<"can't get 2D occ map"<<std::endl;
+        throw std::exception();
+    }
+}
+
 } //namespace ORB_SLAM
 

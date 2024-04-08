@@ -62,6 +62,7 @@ void DenseMapping::Run(){
             {
                 unique_lock<mutex> lock(mMutexOctree);
                 m_octree->clear();
+                m_gridmap.clear();
             }
             vector<KeyFrame*> vKFs = mpAtlas->GetCurrentMap()->GetAllKeyFrames();
             {
@@ -90,17 +91,18 @@ void DenseMapping::Run(){
             InsertScan(origin, ground, nonground);
             ground.clear();
             nonground.clear();
-        }
-        //todo, add if isNewMap octree.clear
 
-        usleep(2000);
+            build2DMap();
+        }
+        else //todo, add if isNewMap octree.clear
+            usleep(2000);
     }
 }
 
 void DenseMapping::InsertScan(const octomap::point3d& sensorOrigin, 
     const PCLPointCloud &ground, const PCLPointCloud &nonground)
 {
-    // 坐标转换到 key???
+    // 坐标转换到 key
     if(!m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMin)||
         !m_octree->coordToKeyChecked(sensorOrigin, m_updateBBXMax))
      {
@@ -178,6 +180,8 @@ void DenseMapping::InsertScan(const octomap::point3d& sensorOrigin,
         m_octree->updateNode(*it, true);
     }
      m_octree->prune();
+     m_treeDepth = m_octree->getTreeDepth();
+     //printf("tree depth = %d\n", m_treeDepth); //==16
 }
 
 void DenseMapping::FilterGroundPlane(const PCLPointCloud& pc, 
@@ -264,18 +268,69 @@ void DenseMapping::FilterGroundPlane(const PCLPointCloud& pc,
                         extract.setNegative(true);
                         cloud_filtered.points.clear();
                         extract.filter(cloud_filtered);
-                    } else{
+                    }
+                    else
+                    {
                         cloud_filtered.points.clear();
                     }
                 }
             }
             // TODO: also do this if overall starting pointcloud too small?
-            if (!groundPlaneFound){ // no plane found or remaining points too small
+            if (!groundPlaneFound)
+            { // no plane found or remaining points too small
                 // printf("No ground plane found in scan. \n");
                 // do a rough fitlering on height to prevent spurious obstacles
                 simple_ground_filter(pc, ground, nonground);
             }
         }
+}
+
+void DenseMapping::build2DMap() {
+    double minX, minY, minZ;
+    double maxX, maxY, maxZ;
+    m_octree->getMetricMin(minX, minY, minZ);
+    m_octree->getMetricMax(maxX, maxY, maxZ);
+    m_gridmap.check_update(minZ, minX, maxZ, maxX);
+
+    octomap::point3d minPt(m_gridmap.m_miny, minY, m_gridmap.m_minx);
+    auto minKey = m_octree->coordToKey(minPt, m_treeDepth);
+
+    //octomap has (x==right, y==down, z==forward)!!!!
+    //map to z -> x, -x -> y (x->y remember to flip by the user), (x forward, y left, z up)
+
+    for (auto it=m_octree->begin(m_treeDepth); it!=m_octree->end(); ++it) {
+        bool inUpdatedBBX = isInUpdateBBX(it);
+        if(!inUpdatedBBX)continue;
+        update2DMap(it, m_octree->isNodeOccupied(*it), minKey);
     }
+}
+
+void DenseMapping::update2DMap(const octomap::OcTree::iterator& it, bool occupied, octomap::OcTreeKey minKey) {
+    if (it.getDepth() == m_treeDepth){
+        auto key = it.getKey();
+        auto idx = m_gridmap.idx(key[2]-minKey[2], 
+            key[0]-minKey[0]);
+        if (occupied) {
+            m_gridmap.data[idx] = 1;
+        } else if (m_gridmap.data[idx] == -1){
+            m_gridmap.data[idx] = 0;
+        }
+    } else {
+        int intSize = 1 << (m_treeDepth - it.getDepth());
+        octomap::OcTreeKey minKey=it.getIndexKey();
+        for(int dx = 0; dx < intSize; dx++) {
+            int i =  dx;
+            for(int dy = 0; dy < intSize; dy++){
+                auto idx = m_gridmap.idx(i, dy);
+                if (occupied) {
+                    m_gridmap.data[idx] = 1;
+                } else if (m_gridmap.data[idx] == -1) {
+                    m_gridmap.data[idx] = 0;
+                }
+            }
+        }
+    }
+}   
+
 
 }

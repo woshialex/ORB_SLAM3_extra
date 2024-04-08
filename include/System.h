@@ -189,6 +189,8 @@ public:
 
     float GetImageScale();
 
+    GridMap& Get2DOccMap();
+
 #ifdef REGISTER_TIMES
     void InsertRectTime(double& time);
     void InsertResizeTime(double& time);
